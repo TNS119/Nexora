@@ -1,18 +1,25 @@
 import os
 import json
 import asyncio
+import base64
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from dotenv import load_dotenv
 
-# Import database service & AI orchestrator contract
 from services.database import log_call_event
-from core.ai_orchestrator import analyze_audio_chunk
+from core.ai_orchestrator import warm_up_engine, SessionThreatTracker
 
 load_dotenv()
 
-app = FastAPI(title="Nexora VoiceLock Engine")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Execute model warm-up on FastAPI startup to avoid cold-start latency
+    warm_up_engine()
+    yield
+
+app = FastAPI(title="Nexora VoiceLock Engine", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,15 +65,31 @@ def health_check():
 async def audio_stream_endpoint(websocket: WebSocket):
     await websocket.accept()
     print("[WebSocket] Client connected successfully")
+    
+    # Instantiate a dedicated threat tracker per connected call stream
+    session_tracker = SessionThreatTracker()
 
     try:
         while True:
-            # 1. Ingest audio stream payload from client
-            client_data = await websocket.receive_text()
+            # 1. Receive incoming WebSocket message (accepts raw binary or base64 text)
+            message = await websocket.receive()
             
-            # 2. Delegate threat processing to Person C's AI Orchestrator module
-            ai_result = await analyze_audio_chunk(client_data)
-            
+            audio_bytes = b""
+            if "bytes" in message and message["bytes"]:
+                audio_bytes = message["bytes"]
+            elif "text" in message and message["text"]:
+                text_data = message["text"]
+                try:
+                    audio_bytes = base64.b64decode(text_data)
+                except Exception:
+                    audio_bytes = text_data.encode("utf-8")
+
+            if not audio_bytes:
+                continue
+
+            # 2. Delegate chunk processing to the session tracker
+            ai_result = await session_tracker.process_chunk(audio_bytes)
+
             threat_score = ai_result["threat_score"]
             acoustic_risk = ai_result["acoustic_risk"]
             intent_risk = ai_result["intent_risk"]
@@ -80,13 +103,13 @@ async def audio_stream_endpoint(websocket: WebSocket):
                 "alert": alert_triggered
             }
 
-            # 3. Trigger async Telegram alert if threat score > 80%
+            # 3. Fire non-blocking Telegram alerts
             if alert_triggered:
                 asyncio.create_task(
                     trigger_telegram_alert(threat_score, reasoning)
                 )
 
-            # 4. Trigger async Supabase audit logging
+            # 4. Fire non-blocking Supabase audit logs
             asyncio.create_task(
                 log_call_event(
                     threat_score,
@@ -96,7 +119,7 @@ async def audio_stream_endpoint(websocket: WebSocket):
                 )
             )
 
-            # 5. Send real-time evaluation back over WebSocket
+            # 5. Send real-time evaluation back to frontend client
             await websocket.send_text(json.dumps(response_payload))
 
     except WebSocketDisconnect:

@@ -6,12 +6,14 @@ from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from dotenv import load_dotenv
 
-# Load secret environment variables from .env file
+# Import database service & AI orchestrator contract
+from services.database import log_call_event
+from core.ai_orchestrator import analyze_audio_chunk
+
 load_dotenv()
 
 app = FastAPI(title="Nexora VoiceLock Engine")
 
-# Enable CORS so Frontend (Next.js) can connect without browser security blocks
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,7 +28,6 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 async def trigger_telegram_alert(threat_score: float, reasoning: str):
     """Sends an instant push notification via Telegram Bot if threat > 80%."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID or TELEGRAM_BOT_TOKEN == "dummy_token_for_now":
-        print("[Alert Info] Telegram credentials missing or placeholder. Skipping alert.")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -51,46 +52,51 @@ async def trigger_telegram_alert(threat_score: float, reasoning: str):
 
 @app.get("/")
 def health_check():
-    """HTTP endpoint to confirm server status."""
     return {"status": "online", "system": "Nexora Backend Running"}
 
 @app.websocket("/ws/audio")
 async def audio_stream_endpoint(websocket: WebSocket):
-    """WebSocket endpoint handling real-time audio streams & threat fusion."""
     await websocket.accept()
     print("[WebSocket] Client connected successfully")
 
     try:
         while True:
-            # 1. Receive incoming stream message from Frontend (Person A)
+            # 1. Ingest audio stream payload from client
             client_data = await websocket.receive_text()
             
-            # --- THREAT FUSION LOGIC ---
-            # (Replace these placeholders with real imports from Person C's AI module later)
-            acoustic_risk = 95.0   # Spectral vocoder anomaly score
-            intent_risk = 89.0     # Coercive NLP scam phrase score
+            # 2. Delegate threat processing to Person C's AI Orchestrator module
+            ai_result = await analyze_audio_chunk(client_data)
             
-            # Threat Fusion Matrix Formula: (0.5 * Acoustic) + (0.5 * Coercion)
-            fused_threat_score = (0.5 * acoustic_risk) + (0.5 * intent_risk)
-            
-            # Formatted JSON payload matching your exact team specification contract
+            threat_score = ai_result["threat_score"]
+            acoustic_risk = ai_result["acoustic_risk"]
+            intent_risk = ai_result["intent_risk"]
+            alert_triggered = ai_result["alert"]
+            reasoning = ai_result["reasoning"]
+
             response_payload = {
-                "threat_score": round(fused_threat_score, 1),
-                "acoustic_risk": round(acoustic_risk, 1),
-                "intent_risk": round(intent_risk, 1),
-                "alert": fused_threat_score > 80.0
+                "threat_score": threat_score,
+                "acoustic_risk": acoustic_risk,
+                "intent_risk": intent_risk,
+                "alert": alert_triggered
             }
 
-            # 2. Trigger async Telegram alert if threat score exceeds 80%
-            if fused_threat_score > 80.0:
+            # 3. Trigger async Telegram alert if threat score > 80%
+            if alert_triggered:
                 asyncio.create_task(
-                    trigger_telegram_alert(
-                        fused_threat_score,
-                        "High spectral phase anomaly + Urgent wire transfer language detected."
-                    )
+                    trigger_telegram_alert(threat_score, reasoning)
                 )
 
-            # 3. Stream real-time telemetry back to Frontend
+            # 4. Trigger async Supabase audit logging
+            asyncio.create_task(
+                log_call_event(
+                    threat_score,
+                    acoustic_risk,
+                    intent_risk,
+                    alert_triggered
+                )
+            )
+
+            # 5. Send real-time evaluation back over WebSocket
             await websocket.send_text(json.dumps(response_payload))
 
     except WebSocketDisconnect:

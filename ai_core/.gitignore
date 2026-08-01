@@ -1,0 +1,50 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE / Editor folders
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Cache and temporary files
+.pytest_cache/
+.mypy_cache/
+.tox/
+.coverage
+coverage.xml
+*.cover
+*.log
+
+# Audio files/artifacts (optional, depending on if you want to commit benchmark audio)
+# benchmark/**/*.wav

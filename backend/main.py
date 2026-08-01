@@ -102,7 +102,8 @@ async def audio_stream_endpoint(websocket: WebSocket):
                 "intent_risk": intent_risk,
                 "alert": alert_triggered,
                 "transcript": ai_result.get("transcript", ""),
-                "triggers": ai_result.get("triggers", [])
+                "triggers": ai_result.get("triggers", []),
+                "reasoning": reasoning
             }
 
             # 3. Fire non-blocking Telegram alerts

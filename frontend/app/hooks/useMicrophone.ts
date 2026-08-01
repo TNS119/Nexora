@@ -6,39 +6,50 @@ export default function useMicrophone() {
   const [isRecording, setIsRecording] = useState(false);
 
   const mediaRecorder = useRef<MediaRecorder | null>(null);
+  const audioStream = useRef<MediaStream | null>(null);
 
   const startRecording = async (
     onChunk: (chunk: Blob) => void
   ) => {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-    });
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
 
-    const recorder = new MediaRecorder(stream, {
-      mimeType: "audio/webm",
-    });
+      audioStream.current = stream;
 
-    mediaRecorder.current = recorder;
+      const recorder = new MediaRecorder(stream, {
+        mimeType: "audio/webm",
+      });
 
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        onChunk(event.data);
-      }
-    };
+      mediaRecorder.current = recorder;
 
-    recorder.start(500);
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          onChunk(event.data);
+        }
+      };
 
-    setIsRecording(true);
+      recorder.start(500);
+      setIsRecording(true);
+    } catch (error) {
+      console.error("Microphone access denied", error);
+      setIsRecording(false);
+    }
   };
 
   const stopRecording = () => {
     mediaRecorder.current?.stop();
+    mediaRecorder.current = null;
+    audioStream.current?.getTracks().forEach((track) => track.stop());
+    audioStream.current = null;
     setIsRecording(false);
   };
 
   useEffect(() => {
     return () => {
       mediaRecorder.current?.stop();
+      audioStream.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
 

@@ -1,7 +1,13 @@
 "use client";
 
+interface WSState {
+  connected?: boolean;
+  lastMessage?: Record<string, unknown> | null;
+  send?: (data: Blob | string | ArrayBuffer | ArrayBufferView) => void;
+}
+
 interface Props {
-  ws: any;
+  ws: WSState | null;
 }
 
 export default function StatusBadge({ ws }: Props) {

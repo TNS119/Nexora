@@ -1,50 +1,70 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+export interface BotMessage {
+  threat_score?: number;
+  acoustic_risk?: number;
+  intent_risk?: number;
+  alert?: boolean;
+  transcript?: string;
+}
 
 export default function useWebSocket(url: string) {
   const socket = useRef<WebSocket | null>(null);
+  const reconnectTimeout = useRef<number | null>(null);
 
   const [connected, setConnected] = useState(false);
-  const [lastMessage, setLastMessage] = useState<any>(null);
+  const [lastMessage, setLastMessage] = useState<BotMessage | null>(null);
 
-  useEffect(() => {
-    socket.current = new WebSocket(url);
+  const connect = useCallback(function connectSocket() {
+    if (socket.current && socket.current.readyState === WebSocket.OPEN) {
+      return;
+    }
 
-    socket.current.onopen = () => {
+    const ws = new WebSocket(url);
+    socket.current = ws;
+
+    ws.onopen = () => {
       setConnected(true);
       console.log("WebSocket Connected");
     };
 
-    socket.current.onclose = () => {
+    ws.onclose = () => {
       setConnected(false);
       console.log("WebSocket Closed");
+      reconnectTimeout.current = window.setTimeout(() => connectSocket(), 3000);
     };
 
-    socket.current.onerror = (err) => {
-      console.error(err);
+    ws.onerror = (err: Event) => {
+      console.error("WebSocket error", err);
+      ws.close();
     };
 
-    socket.current.onmessage = (event) => {
+    ws.onmessage = (event: MessageEvent) => {
       try {
         const data = JSON.parse(event.data);
-        setLastMessage(data);
+        setLastMessage(data as BotMessage);
       } catch {
         console.log(event.data);
       }
     };
-
-    return () => {
-      socket.current?.close();
-    };
   }, [url]);
 
-  const send = (data: Blob | string) => {
-    if (
-      socket.current &&
-      socket.current.readyState === WebSocket.OPEN
-    ) {
-      socket.current.send(data);
+  useEffect(() => {
+    connect();
+
+    return () => {
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current);
+      }
+      socket.current?.close();
+    };
+  }, [connect]);
+
+  const send = (data: string | Blob | ArrayBufferLike | ArrayBufferView) => {
+    if (socket.current && socket.current.readyState === WebSocket.OPEN) {
+      socket.current.send(data as string | Blob | ArrayBufferLike);
     }
   };
 
@@ -52,5 +72,5 @@ export default function useWebSocket(url: string) {
     connected,
     lastMessage,
     send,
-  };
+  } as const;
 }

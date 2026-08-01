@@ -12,8 +12,18 @@ import {
   Activity,
 } from "lucide-react";
 
+interface WSState {
+  connected?: boolean;
+  lastMessage?: {
+    threat_score?: number | string;
+    acoustic_risk?: number | string;
+    intent_risk?: number | string;
+  } | null;
+  send?: (data: Blob | string | ArrayBuffer | ArrayBufferView) => void;
+}
+
 interface Props {
-  ws: any;
+  ws: WSState | null;
 }
 
 export default function ThreatMeter({ ws }: Props) {

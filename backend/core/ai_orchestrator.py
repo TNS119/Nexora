@@ -5,7 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 try:
     from ai_engine import RealtimeThreatAnalyzer, EngineConfig, transcribe_audio
     config = EngineConfig.from_env()
-    analyzer = RealtimeThreatAnalyzer(config=config, mode="fast")
+    analyzer = RealtimeThreatAnalyzer(
+        config=config,
+        mode="fast",
+        transcribe_interval_chunks=1,
+    )
     HAS_AI_ENGINE = True
 except ImportError:
     HAS_AI_ENGINE = False
@@ -43,6 +47,10 @@ class SessionThreatTracker:
             # 2. Fire-and-forget background transcription task
             executor.submit(self._run_background_transcription, audio_chunk_bytes)
 
+            # Update the current transcript if the engine returns one immediately.
+            if result.get("transcript"):
+                self.latest_transcript = str(result["transcript"])
+
             threat_score = float(result.get("threat_score", 0.0))
             acoustic_risk = float(result.get("acoustic_risk", 0.0))
             intent_risk = float(result.get("intent_risk", 0.0))
@@ -52,18 +60,21 @@ class SessionThreatTracker:
                 "threat_score": threat_score,
                 "acoustic_risk": acoustic_risk,
                 "intent_risk": intent_risk,
+                "transcript": self.latest_transcript,
                 "alert": threat_score > 80.0,
                 "reasoning": reasoning,
             }
         else:
             # Fallback mock engine for local testing before Person C installs ai_engine
             await asyncio.sleep(0.005)
+            self.latest_transcript = ""
             return {
                 "threat_score": 88.5,
                 "acoustic_risk": 92.0,
                 "intent_risk": 85.0,
+                "transcript": "",
                 "alert": True,
-                "reasoning": "Mock evaluation: High-urgency coercive language & spectral anomaly detected."
+                "reasoning": "Mock evaluation: High-urgency coercive language & spectral anomaly detected.",
             }
 
     def _run_background_transcription(self, audio_chunk_bytes: bytes):

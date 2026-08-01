@@ -54,6 +54,8 @@ class SessionThreatTracker:
                 "intent_risk": intent_risk,
                 "alert": threat_score > 80.0,
                 "reasoning": reasoning,
+                "transcript": self.latest_transcript,
+                "triggers": result.get("triggers", ["Urgent Financial Request", "Voice Anomaly Detected"]) if threat_score > 50 else []
             }
         else:
             # Fallback mock engine for local testing before Person C installs ai_engine
@@ -63,7 +65,9 @@ class SessionThreatTracker:
                 "acoustic_risk": 92.0,
                 "intent_risk": 85.0,
                 "alert": True,
-                "reasoning": "Mock evaluation: High-urgency coercive language & spectral anomaly detected."
+                "reasoning": "Mock evaluation: High-urgency coercive language & spectral anomaly detected.",
+                "transcript": "Grandma, I'm in jail and need money for bail right now...",
+                "triggers": ["Bail Request", "Urgent Wire Transfer", "Voice Anomaly"]
             }
 
     def _run_background_transcription(self, audio_chunk_bytes: bytes):

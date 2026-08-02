@@ -105,7 +105,7 @@ function encodeWav(buffer: AudioBuffer) {
 }
 
 export default function Home() {
-  const [wsUrl, setWsUrl] = useState("ws://localhost:8000/ws/audio");
+  const [wsUrl, setWsUrl] = useState("wss://nexora-unf8.onrender.com/ws/audio");
 
   useEffect(() => {
     if (typeof window !== "undefined") {

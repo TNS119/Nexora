@@ -145,7 +145,7 @@ export default function CallScreen({
               </div>
 
               {/* Mode A / Mode B — below the waveform */}
-              <div className="mt-4 rounded-[20px] border border-white/10 bg-slate-900/80 p-3">
+              {/* <div className="mt-4 rounded-[20px] border border-white/10 bg-slate-900/80 p-3">
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
@@ -173,7 +173,8 @@ export default function CallScreen({
                 <p className="mt-2 text-center text-[11px] uppercase tracking-[0.25em] text-slate-500">
                   {mode === "live" ? "Live microphone stream" : "Pre-recorded scam audio"}
                 </p>
-              </div>
+              </div> */}
+
             </div>
           </div>
 
@@ -209,7 +210,7 @@ export default function CallScreen({
               </span>
             </div>
 
-            <div className="grid w-full max-w-sm grid-cols-2 gap-3 sm:gap-4">
+            {/* <div className="grid w-full max-w-sm grid-cols-2 gap-3 sm:gap-4">
               <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-center">
                 <p className="text-[11px] uppercase tracking-[0.25em] text-slate-400">Voice Risk</p>
                 <p className="mt-1 text-xl font-semibold text-cyan-300">{voiceRisk.toFixed(0)}%</p>
@@ -218,7 +219,7 @@ export default function CallScreen({
                 <p className="text-[11px] uppercase tracking-[0.25em] text-slate-400">Intent Risk</p>
                 <p className="mt-1 text-xl font-semibold text-amber-300">{intentRisk.toFixed(0)}%</p>
               </div>
-            </div>
+            </div> */}
 
             <div className="flex w-full max-w-sm items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm">
               <div>

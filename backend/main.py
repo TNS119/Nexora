@@ -21,9 +21,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Nexora VoiceLock Engine", lifespan=lifespan)
 
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -102,8 +104,9 @@ async def audio_stream_endpoint(websocket: WebSocket):
                 "intent_risk": intent_risk,
                 "alert": alert_triggered,
                 "transcript": ai_result.get("transcript", ""),
-                "reasoning": reasoning,
+                "triggers": ai_result.get("triggers", [])
             }
+
 
             # 3. Fire non-blocking Telegram alerts
             if alert_triggered:

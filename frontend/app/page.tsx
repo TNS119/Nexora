@@ -195,7 +195,7 @@ export default function Home() {
       window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognitionCtor) {
       return;
-    }t
+    }
 
     const recognition = new SpeechRecognitionCtor();
     recognition.lang = "en-US";

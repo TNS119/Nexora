@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Import Person C's engine (or fall back gracefully to mock if not yet installed)
 try:
-    from ai_engine import RealtimeThreatAnalyzer, EngineConfig, transcribe_audio
+    from ai_core.ai_engine import RealtimeThreatAnalyzer, EngineConfig, transcribe_audio
     config = EngineConfig.from_env()
     analyzer = RealtimeThreatAnalyzer(
         config=config,
@@ -63,18 +63,21 @@ class SessionThreatTracker:
                 "transcript": self.latest_transcript,
                 "alert": threat_score > 80.0,
                 "reasoning": reasoning,
+                "triggers": result.get("triggers", ["Urgent Financial Request", "Voice Anomaly Detected"]) if threat_score > 50 else []
             }
         else:
             # Fallback mock engine for local testing before Person C installs ai_engine
             await asyncio.sleep(0.005)
-            self.latest_transcript = ""
+            mock_transcript = "Grandma, I'm in jail and need money for bail right now..."
+            self.latest_transcript = mock_transcript
             return {
                 "threat_score": 88.5,
                 "acoustic_risk": 92.0,
                 "intent_risk": 85.0,
-                "transcript": "",
+                "transcript": mock_transcript,
                 "alert": True,
                 "reasoning": "Mock evaluation: High-urgency coercive language & spectral anomaly detected.",
+                "triggers": ["Bail Request", "Urgent Wire Transfer", "Voice Anomaly"]
             }
 
     def _run_background_transcription(self, audio_chunk_bytes: bytes):

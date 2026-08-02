@@ -8,6 +8,7 @@ export interface BotMessage {
   intent_risk?: number;
   alert?: boolean;
   transcript?: string;
+  triggers?: string[];
 }
 
 export default function useWebSocket(url: string) {
@@ -62,9 +63,11 @@ export default function useWebSocket(url: string) {
     };
   }, [connect]);
 
-  const send = (data: string | Blob | ArrayBufferLike | ArrayBufferView) => {
+  type WebSocketPayload = string | Blob | BufferSource;
+
+  const send = (data: WebSocketPayload) => {
     if (socket.current && socket.current.readyState === WebSocket.OPEN) {
-      socket.current.send(data as string | Blob | ArrayBufferLike);
+      socket.current.send(data);
     }
   };
 

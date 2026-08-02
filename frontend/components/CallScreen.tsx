@@ -20,7 +20,7 @@ import "react-circular-progressbar/dist/styles.css";
 interface WebSocketState {
   connected: boolean;
   lastMessage: BotMessage | null;
-  send: (data: string | Blob | ArrayBufferLike | ArrayBufferView) => void;
+  send: (data: string | Blob | BufferSource) => void;
 }
 
 interface Props {

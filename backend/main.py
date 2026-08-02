@@ -23,7 +23,7 @@ app = FastAPI(title="Nexora VoiceLock Engine", lifespan=lifespan)
 
 allowed_origins = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:3000,http://localhost:3001,http://10.10.18.190:3000,http://10.10.18.190:3001"
+    "http://localhost:3000,http://localhost:3001,http://10.10.18.190:3000,http://10.10.18.190:3001,https://nexora-eight-sepia.vercel.app/"
 ).split(",")
 
 app.add_middleware(

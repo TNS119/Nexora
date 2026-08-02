@@ -13,21 +13,24 @@ import {
   buildStyles,
 } from "react-circular-progressbar";
 
-import { BotMessage } from "@/app/hooks/useWebSocket";
+import { BotMessage, WsStatus } from "@/app/hooks/useWebSocket";
 
 import "react-circular-progressbar/dist/styles.css";
 
 interface WebSocketState {
   connected: boolean;
+  wsStatus: WsStatus;
   lastMessage: BotMessage | null;
+  chunksSent: number;
+  payloadsReceived: number;
   send: (data: string | Blob | BufferSource) => void;
+  resetCounters: () => void;
 }
 
 interface Props {
   ws: WebSocketState;
   isAnswered?: boolean;
   duration?: string;
-  transcript?: string;
   isLive?: boolean;
   mode?: "live" | "scam";
   onModeChange?: (mode: "live" | "scam") => void;
@@ -38,8 +41,6 @@ interface Props {
 export default function CallScreen({
   ws,
   isAnswered = false,
-  // duration = "00:00",
-  transcript = "",
   isLive = false,
   mode = "live",
   onModeChange,
@@ -58,18 +59,6 @@ export default function CallScreen({
   const status =
     score < 40 ? "SAFE" : score < 80 ? "WARNING" : "SCAM DETECTED";
 
-  const liveStatus = isLive
-    ? "LIVE"
-    : ws.connected
-    ? "CONNECTED"
-    : "OFFLINE";
-
-  const liveBadge = isLive
-    ? "bg-emerald-500/20 text-emerald-200"
-    : ws.connected
-    ? "bg-sky-500/20 text-sky-200"
-    : "bg-amber-500/20 text-amber-200";
-
   const waveformHeights = [28, 55, 42, 82, 63, 95, 58, 105, 46, 90, 54, 76, 48, 88];
 
   return (
@@ -86,6 +75,7 @@ export default function CallScreen({
         </header>
 
         <div className="flex-1 lg:grid lg:grid-cols-[1.1fr_0.9fr] lg:gap-8">
+          {/* ── Left panel ── */}
           <div className="relative flex flex-col items-center justify-center rounded-[28px] border border-white/10 bg-white/5 p-4 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-sm sm:p-6 lg:items-center lg:text-center lg:p-8">
             <motion.div
               animate={{ scale: [1, 1.04, 1] }}
@@ -114,62 +104,29 @@ export default function CallScreen({
                 className={isCallActive ? "text-emerald-400" : "text-slate-400"}
                 size={20}
               />
-
               <span className={isCallActive ? "font-semibold text-emerald-400" : "font-semibold text-slate-300"}>
                 {isCallActive ? "AI Protection Active" : "Waiting for call answer"}
               </span>
             </motion.div>
 
             <div className="mt-8 w-full max-w-xl">
-              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                <div className="flex items-center justify-between rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300">
-                  <span>
-                    {isCallActive
-                      ? "Live audio stream is active"
-                      : "Audio signal will begin once the call is answered"}
-                  </span>
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      isCallActive ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-500/20 text-slate-300"
-                    }`}
-                  >
-                    {isCallActive ? "LIVE" : "STANDBY"}
-                  </span>
-                </div>
-
-                <div className="rounded-full border border-white/10 bg-slate-900/80 px-2 py-2 text-sm text-slate-300">
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onModeChange?.("live")}
-                      className={`rounded-full px-4 py-2 transition ${
-                        mode === "live"
-                          ? "bg-cyan-500 text-slate-950"
-                          : "bg-slate-800 text-slate-300"
-                      }`}
-                    >
-                      Mode A
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onModeChange?.("scam")}
-                      className={`rounded-full px-4 py-2 transition ${
-                        mode === "scam"
-                          ? "bg-rose-500 text-slate-950"
-                          : "bg-slate-800 text-slate-300"
-                      }`}
-                    >
-                      Mode B
-                    </button>
-                  </div>
-                  <p className="mt-2 text-[11px] uppercase tracking-[0.25em] text-slate-500">
-                    {mode === "live"
-                      ? "Mic stream"
-                      : "Demo scam audio"}
-                  </p>
-                </div>
+              {/* Audio stream status bar */}
+              <div className="flex items-center justify-between rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300">
+                <span>
+                  {isCallActive
+                    ? "Live audio stream is active"
+                    : "Audio signal will begin once the call is answered"}
+                </span>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    isCallActive ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-500/20 text-slate-300"
+                  }`}
+                >
+                  {isCallActive ? "LIVE" : "STANDBY"}
+                </span>
               </div>
 
+              {/* Waveform graph */}
               <div className="mt-6 flex h-36 items-end justify-center gap-[7px] rounded-[24px] border border-white/10 bg-black/20 px-6 py-5 overflow-hidden sm:h-40 sm:px-8 sm:py-6 lg:h-44 lg:px-10 lg:py-8">
                 {waveformHeights.map((height, index) => (
                   <motion.div
@@ -186,9 +143,41 @@ export default function CallScreen({
                   />
                 ))}
               </div>
+
+              {/* Mode A / Mode B — below the waveform */}
+              <div className="mt-4 rounded-[20px] border border-white/10 bg-slate-900/80 p-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onModeChange?.("live")}
+                    className={`rounded-full px-4 py-2.5 text-sm font-medium transition ${
+                      mode === "live"
+                        ? "bg-cyan-500 text-slate-950 shadow-[0_0_18px_rgba(34,211,238,.4)]"
+                        : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                    }`}
+                  >
+                    Mode A — Mic
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onModeChange?.("scam")}
+                    className={`rounded-full px-4 py-2.5 text-sm font-medium transition ${
+                      mode === "scam"
+                        ? "bg-rose-500 text-slate-950 shadow-[0_0_18px_rgba(244,63,94,.4)]"
+                        : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                    }`}
+                  >
+                    Mode B — Demo
+                  </button>
+                </div>
+                <p className="mt-2 text-center text-[11px] uppercase tracking-[0.25em] text-slate-500">
+                  {mode === "live" ? "Live microphone stream" : "Pre-recorded scam audio"}
+                </p>
+              </div>
             </div>
           </div>
 
+          {/* ── Right panel ── */}
           <div className="mt-8 flex flex-col items-center justify-center gap-6 rounded-[28px] border border-white/10 bg-slate-950/40 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-sm sm:p-6 lg:mt-0 lg:p-8">
             <div className="h-44 w-44 sm:h-52 sm:w-52 lg:h-56 lg:w-56">
               <CircularProgressbar
@@ -241,51 +230,7 @@ export default function CallScreen({
               </span>
             </div>
 
-            <div className="w-full max-w-sm rounded-[28px] border border-white/10 bg-slate-900/70 p-4 text-left text-slate-300 shadow-lg shadow-slate-950/20">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Transcript Feed</p>
-                  <p className="mt-2 text-sm text-slate-200">
-                    {isCallActive ? "Live insights from recent audio." : "Awaiting call..."}
-                  </p>
-                </div>
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${liveBadge}`}>
-                  {liveStatus}
-                </span>
-              </div>
-
-              <div className="mt-4 space-y-3 max-h-56 overflow-y-auto pr-2 text-sm leading-6 text-slate-300">
-                {isCallActive ? (
-                  transcript ? (
-                    transcript.split("\n\n").map((line, index) => (
-                      <motion.div
-                        key={index}
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.3 }}
-                        className="rounded-2xl bg-slate-950/90 p-3 text-slate-200"
-                      >
-                        {line}
-                      </motion.div>
-                    ))
-                  ) : (
-                    <motion.p
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: [0.5, 1, 0.5] }}
-                      transition={{ duration: 1.5, repeat: Infinity }}
-                      className="rounded-2xl bg-slate-950/90 p-3 text-slate-500"
-                    >
-                      Listening to audio...
-                    </motion.p>
-                  )
-                ) : (
-                  <p className="rounded-2xl bg-slate-950/90 p-3 text-slate-500">
-                    Answer the call to see live insights.
-                  </p>
-                )}
-              </div>
-            </div>
-
+            {/* Call action buttons */}
             <div className="grid w-full max-w-sm grid-cols-2 gap-4 sm:gap-6">
               <motion.button
                 whileTap={{ scale: 0.94 }}

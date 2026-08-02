@@ -21,7 +21,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Nexora VoiceLock Engine", lifespan=lifespan)
 
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+allowed_origins = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:3001,http://10.10.18.190:3000,http://10.10.18.190:3001"
+).split(",")
 
 app.add_middleware(
     CORSMiddleware,
@@ -74,8 +77,19 @@ async def audio_stream_endpoint(websocket: WebSocket):
     try:
         while True:
             # 1. Receive incoming WebSocket message (accepts raw binary or base64 text)
-            message = await websocket.receive()
-            
+            try:
+                message = await websocket.receive()
+            except (WebSocketDisconnect, RuntimeError):
+                # RuntimeError is raised by Starlette when receive() is called
+                # after a disconnect frame has already been consumed.
+                print("[WebSocket] Client disconnected (receive)")
+                break
+
+            # Handle both disconnect-type messages and audio payloads
+            if message.get("type") == "websocket.disconnect":
+                print("[WebSocket] Client disconnected (message type)")
+                break
+
             audio_bytes = b""
             if "bytes" in message and message["bytes"]:
                 audio_bytes = message["bytes"]
@@ -96,7 +110,9 @@ async def audio_stream_endpoint(websocket: WebSocket):
             acoustic_risk = ai_result["acoustic_risk"]
             intent_risk = ai_result["intent_risk"]
             alert_triggered = ai_result["alert"]
-            reasoning = ai_result["reasoning"]
+            reasoning = ai_result.get("reasoning", "Acoustic or intent threat detected.")
+
+            print(f"[WebSocket] Chunk evaluated: threat={threat_score} acoustic={acoustic_risk} intent={intent_risk}")
 
             response_payload = {
                 "threat_score": threat_score,
@@ -106,7 +122,6 @@ async def audio_stream_endpoint(websocket: WebSocket):
                 "transcript": ai_result.get("transcript", ""),
                 "triggers": ai_result.get("triggers", [])
             }
-
 
             # 3. Fire non-blocking Telegram alerts
             if alert_triggered:
@@ -125,7 +140,15 @@ async def audio_stream_endpoint(websocket: WebSocket):
             )
 
             # 5. Send real-time evaluation back to frontend client
-            await websocket.send_text(json.dumps(response_payload))
+            try:
+                await websocket.send_text(json.dumps(response_payload))
+            except (WebSocketDisconnect, RuntimeError):
+                print("[WebSocket] Client disconnected (send)")
+                break
 
-    except WebSocketDisconnect:
-        print("[WebSocket] Client disconnected")
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        print(f"[WebSocket] Unexpected error: {exc}")
+    finally:
+        print("[WebSocket] Session ended")

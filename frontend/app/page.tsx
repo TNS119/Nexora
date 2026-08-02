@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -29,15 +29,6 @@ declare global {
   }
 }
 
-function formatDuration(seconds: number) {
-  const mins = Math.floor(seconds / 60)
-    .toString()
-    .padStart(2, "0");
-  const secs = Math.floor(seconds % 60)
-    .toString()
-    .padStart(2, "0");
-  return `${mins}:${secs}`;
-}
 
 function writeString(view: DataView, offset: number, string: string) {
   for (let i = 0; i < string.length; i += 1) {
@@ -114,13 +105,20 @@ function encodeWav(buffer: AudioBuffer) {
 }
 
 export default function Home() {
-  const ws = useWebSocket("ws://localhost:8000/ws/audio");
+  const [wsUrl, setWsUrl] = useState("ws://localhost:8000/ws/audio");
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const host = window.location.hostname;
+      setWsUrl(`ws://${host}:8000/ws/audio`);
+    }
+  }, []);
+
+  const ws = useWebSocket(wsUrl);
   const mic = useMicrophone();
   const [isAnswered, setIsAnswered] = useState(false);
   const [demoMode, setDemoMode] = useState<"live" | "scam">("live");
   const [callStartTime, setCallStartTime] = useState<number | null>(null);
-  const [duration, setDuration] = useState("00:00");
-  const [transcriptFeed, setTranscriptFeed] = useState<string[]>([]);
   const [sampleActive, setSampleActive] = useState(false);
   const [recognitionActive, setRecognitionActive] = useState(false);
 
@@ -130,9 +128,25 @@ export default function Home() {
   const sampleIndexRef = useRef(0);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
+  // ─── Mode-B: HTML audio element ref for playback ───────────────────────────
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+
+  // Stable send ref so streaming callbacks always call the current socket's send
+  // without needing ws in their dependency arrays.
+  const wsSendRef = useRef(ws.send);
+  useEffect(() => {
+    wsSendRef.current = ws.send;
+  }, [ws.send]);
+
+  const wsConnectedRef = useRef(ws.connected);
+  useEffect(() => {
+    wsConnectedRef.current = ws.connected;
+  }, [ws.connected]);
+
   const loadSampleAudio = useCallback(async () => {
     if (!audioContextRef.current) {
-      audioContextRef.current = new AudioContext();
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      audioContextRef.current = new AudioContextCtor();
     }
 
     if (sampleBufferRef.current) {
@@ -140,11 +154,19 @@ export default function Home() {
     }
 
     const response = await fetch("/sample_ai_scam.wav");
+    if (!response.ok) {
+      console.warn("[VoiceLock] Failed to load /sample_ai_scam.wav — check the public directory.");
+      console.assert(false, "[VoiceLock] sample_ai_scam.wav fetch failed with status " + response.status);
+      throw new Error("sample_ai_scam.wav not found");
+    }
     const arrayBuffer = await response.arrayBuffer();
     const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
     sampleBufferRef.current = audioBuffer;
     return audioBuffer;
   }, []);
+
+  // Track the in-flight play() promise so stopSampleStreaming can await it before pausing.
+  const audioPlayPromiseRef = useRef<Promise<void> | null>(null);
 
   const stopSampleStreaming = useCallback(() => {
     if (sampleIntervalRef.current !== null) {
@@ -153,15 +175,44 @@ export default function Home() {
     }
     sampleIndexRef.current = 0;
     setSampleActive(false);
+
+    // Await any in-flight play() promise before pausing to prevent AbortError
+    const el = audioElRef.current;
+    if (el) {
+      const p = audioPlayPromiseRef.current;
+      if (p) {
+        p.then(() => { el.pause(); el.currentTime = 0; }).catch(() => {});
+        audioPlayPromiseRef.current = null;
+      } else {
+        el.pause();
+        el.currentTime = 0;
+      }
+    }
   }, []);
 
   const startSampleStreaming = useCallback(async () => {
-    if (!ws.connected) {
+    if (!wsConnectedRef.current) {
       return;
     }
 
-    const buffer = await loadSampleAudio();
-    const chunkSize = Math.floor(buffer.sampleRate * 0.5);
+    let buffer: AudioBuffer;
+    try {
+      buffer = await loadSampleAudio();
+    } catch {
+      return;
+    }
+
+    // ── Play the audio through the HTML <audio> element so the user can hear it ──
+    if (audioElRef.current) {
+      audioElRef.current.src = "/sample_ai_scam.wav";
+      audioPlayPromiseRef.current = audioElRef.current.play();
+      audioPlayPromiseRef.current.catch((err) => {
+        console.warn("[VoiceLock] Audio element play() failed:", err);
+        audioPlayPromiseRef.current = null;
+      });
+    }
+
+    const chunkSize = Math.floor(buffer.sampleRate * 0.5); // 500 ms worth of samples
     const totalChunks = Math.ceil(buffer.length / chunkSize);
 
     setSampleActive(true);
@@ -182,13 +233,14 @@ export default function Home() {
         audioContextRef.current!
       );
       const wavBytes = encodeWav(segment);
-      ws.send(wavBytes);
+      // Use the ref so we always call the current stable send without deps
+      wsSendRef.current(wavBytes);
       sampleIndexRef.current += 1;
     };
 
     sendNextChunk();
     sampleIntervalRef.current = window.setInterval(sendNextChunk, 500);
-  }, [loadSampleAudio, stopSampleStreaming, ws]);
+  }, [loadSampleAudio, stopSampleStreaming]);
 
   const startSpeechRecognition = useCallback(() => {
     const SpeechRecognitionCtor =
@@ -203,20 +255,9 @@ export default function Home() {
     recognition.continuous = true;
 
     recognition.onresult = (event: SpeechRecognitionEventLike) => {
-      let transcript = "";
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        transcript += event.results[i][0].transcript;
-      }
-      transcript = transcript.trim();
-      if (!transcript) return;
-
-      setTranscriptFeed((current) => {
-        const lastTranscript = current[current.length - 1];
-        if (lastTranscript === transcript) {
-          return current;
-        }
-        return [...current, transcript].slice(-6);
-      });
+      // SpeechRecognition runs in Mode-A to drive the mic stream;
+      // transcript display has been removed so we just let it run silently.
+      void event;
     };
 
     recognition.onerror = () => {
@@ -238,13 +279,19 @@ export default function Home() {
     setRecognitionActive(false);
   }, []);
 
+  // ─── Reset counters when a new call starts ─────────────────────────────────
+  useEffect(() => {
+    if (isAnswered) {
+      ws.resetCounters();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAnswered]);
+
   useEffect(() => {
     const tearDownStreaming = () => {
-      window.setTimeout(() => {
-        stopSampleStreaming();
-        mic.stopRecording();
-        stopSpeechRecognition();
-      }, 0);
+      stopSampleStreaming();
+      mic.stopRecording();
+      stopSpeechRecognition();
     };
 
     if (!isAnswered || !ws.connected) {
@@ -254,56 +301,26 @@ export default function Home() {
 
     if (demoMode === "live") {
       tearDownStreaming();
-      window.setTimeout(() => {
-        mic.startRecording((chunk) => {
-          ws.send(chunk);
-        });
-        startSpeechRecognition();
-      }, 0);
+      // Mode-A: request mic → MediaRecorder → stream 500 ms blobs over WS
+      mic.startRecording((chunk) => {
+        wsSendRef.current(chunk);
+      });
+      startSpeechRecognition();
     } else {
-      window.setTimeout(() => {
-        mic.stopRecording();
-        stopSpeechRecognition();
-        void startSampleStreaming();
-      }, 0);
+      mic.stopRecording();
+      stopSpeechRecognition();
+      // Mode-B: play audio element + stream WAV chunks over WS
+      void startSampleStreaming();
     }
 
     return () => {
       tearDownStreaming();
     };
-  }, [demoMode, isAnswered, mic, startSampleStreaming, startSpeechRecognition, stopSampleStreaming, stopSpeechRecognition, ws]);
+  // ws.connected is a primitive boolean — safe in deps. wsSendRef is a ref, not needed.
+  // mic object shouldn't be in deps to avoid infinite loops when isRecording toggles.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demoMode, isAnswered, ws.connected, startSampleStreaming, startSpeechRecognition, stopSampleStreaming, stopSpeechRecognition]);
 
-  useEffect(() => {
-    if (!isAnswered || callStartTime === null) {
-      window.setTimeout(() => {
-        setDuration("00:00");
-      }, 0);
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      setDuration(formatDuration((Date.now() - callStartTime) / 1000));
-    }, 1000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [isAnswered, callStartTime]);
-
-  useEffect(() => {
-    const transcript = ws.lastMessage?.transcript?.trim();
-    if (!transcript || !isAnswered) return;
-
-    window.setTimeout(() => {
-      setTranscriptFeed((current) => {
-        const lastTranscript = current[current.length - 1];
-        if (lastTranscript === transcript) {
-          return current;
-        }
-        return [...current, transcript].slice(-6);
-      });
-    }, 0);
-  }, [ws.lastMessage?.transcript, isAnswered]);
 
   const handleAnswerCall = () => {
     setIsAnswered(true);
@@ -319,8 +336,6 @@ export default function Home() {
     stopSampleStreaming();
     setIsAnswered(false);
     setCallStartTime(null);
-    setDuration("00:00");
-    setTranscriptFeed([]);
   };
 
   const isStreaming =
@@ -328,21 +343,22 @@ export default function Home() {
     ws.connected &&
     (demoMode === "live" ? (mic.isRecording || recognitionActive) : sampleActive);
 
-  const transcript = transcriptFeed.length
-    ? transcriptFeed.join("\n\n")
-    : ws.lastMessage?.transcript ?? "";
 
   return (
-    <CallScreen
-      ws={ws}
-      isAnswered={isAnswered}
-      duration={duration}
-      transcript={transcript}
-      isLive={isStreaming}
-      mode={demoMode}
-      onModeChange={setDemoMode}
-      onAnswerCall={handleAnswerCall}
-      onRejectCall={handleRejectCall}
-    />
+    <>
+      {/* Hidden audio element for Mode-B playback */}
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <audio ref={audioElRef} style={{ display: "none" }} />
+
+      <CallScreen
+        ws={ws}
+        isAnswered={isAnswered}
+        isLive={isStreaming}
+        mode={demoMode}
+        onModeChange={setDemoMode}
+        onAnswerCall={handleAnswerCall}
+        onRejectCall={handleRejectCall}
+      />
+    </>
   );
 }

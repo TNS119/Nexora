@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export default function useMicrophone() {
   const [isRecording, setIsRecording] = useState(false);
@@ -8,19 +8,27 @@ export default function useMicrophone() {
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioStream = useRef<MediaStream | null>(null);
 
-  const startRecording = async (
+  const startRecording = useCallback(async (
     onChunk: (chunk: Blob) => void
   ) => {
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("Microphone access is unavailable. If you're on a mobile device or network IP, use HTTPS or switch to 'Mode B - Demo'.");
+        setIsRecording(false);
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
       });
 
       audioStream.current = stream;
 
-      const recorder = new MediaRecorder(stream, {
-        mimeType: "audio/webm",
-      });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+
+      const recorder = new MediaRecorder(stream, { mimeType });
 
       mediaRecorder.current = recorder;
 
@@ -30,21 +38,21 @@ export default function useMicrophone() {
         }
       };
 
-      recorder.start(500);
+      recorder.start(500); // 500 ms slices
       setIsRecording(true);
     } catch (error) {
-      console.error("Microphone access denied", error);
+      console.error("[VoiceLock] Microphone access denied or unavailable:", error);
       setIsRecording(false);
     }
-  };
+  }, []);
 
-  const stopRecording = () => {
+  const stopRecording = useCallback(() => {
     mediaRecorder.current?.stop();
     mediaRecorder.current = null;
     audioStream.current?.getTracks().forEach((track) => track.stop());
     audioStream.current = null;
     setIsRecording(false);
-  };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -53,9 +61,9 @@ export default function useMicrophone() {
     };
   }, []);
 
-  return {
+  return useMemo(() => ({
     isRecording,
     startRecording,
     stopRecording,
-  };
+  }), [isRecording, startRecording, stopRecording]);
 }

@@ -16,6 +16,14 @@ from collections import deque
 from pathlib import Path
 from typing import Any, BinaryIO, Iterable
 
+try:
+    import imageio_ffmpeg
+    import audioread.ffdec
+    # Monkeypatch audioread to use the bundled imageio_ffmpeg executable
+    audioread.ffdec.COMMANDS = (imageio_ffmpeg.get_ffmpeg_exe(),) + audioread.ffdec.COMMANDS
+except ImportError:
+    pass
+
 
 AudioInput = str | Path | bytes | bytearray | BinaryIO
 
@@ -110,13 +118,18 @@ def analyze_realtime_audio_chunk(
     """
 
     config = config or EngineConfig.from_env()
-    acoustic = analyze_acoustic_risk(
-        audio,
-        sample_rate=config.sample_rate,
-        raw_pcm=raw_pcm,
-        pcm_channels=pcm_channels,
-        mode=mode,
-    )
+    try:
+        acoustic = analyze_acoustic_risk(
+            audio,
+            sample_rate=config.sample_rate,
+            raw_pcm=raw_pcm,
+            pcm_channels=pcm_channels,
+            mode=mode,
+        )
+    except Exception as exc:
+        acoustic = {"score": 0, "triggers": []}
+        if include_debug:
+            print(f"[Acoustic Engine] Suppressed error for unsupported audio chunk: {exc}")
     transcript = transcript_text or ""
     intent = _fallback_coercion_analysis(transcript) if transcript else {
         "coercion_score": 0,
@@ -260,7 +273,7 @@ class RealtimeThreatAnalyzer:
         )
         if confirmed_acoustic_score >= 85:
             final_score = max(final_score, confirmed_acoustic_score)
-        if smoothed_coercion_score >= 85:
+        if smoothed_coercion_score >= 70:
             final_score = max(final_score, smoothed_coercion_score)
         result["instant_threat_score"] = result["threat_score"]
         result["instant_acoustic_risk"] = result["acoustic_risk"]
@@ -358,11 +371,34 @@ def analyze_coercion_intent(
         return _fallback_coercion_analysis(text)
 
     system_prompt = (
-        "You are an expert fraud detection AI. Analyze the given call transcript "
-        "for emergency financial scams, bail scams, family impersonation, secrecy "
-        "demands, urgent transfers, gift cards, crypto transfers, or coercion. "
-        "Respond only as valid JSON with keys: coercion_score integer 0-100, "
-        "is_scam boolean, detected_triggers array of short strings."
+        "You are a Security and Fraud Detection Agent. Your job is to analyze incoming messages and evaluate their risk level for spam, financial scams, phishing, or suspicious activity.\n\n"
+        "### EVALUATION RULES:\n"
+        "1. BENIGN CONVERSATION (0-10% Risk):\n"
+        "   - Everyday greetings (\"hi\", \"hello\", \"how are you\"), casual chat, friendly check-ins, or standard questions MUST be scored between 0% and 10%.\n"
+        "   - Do NOT mark casual text as suspicious under any circumstances.\n\n"
+        "2. SUSPICIOUS / FRAUDULENT INDICATORS (70-100% Risk):\n"
+        "   - Requests for money, transfers, or gift cards (e.g., \"please send 500 rupees\", \"send money to this account\").\n"
+        "   - Urgent demands for action (\"do this immediately\", \"your account will be blocked\").\n"
+        "   - Requests for sensitive data (OTPs, passwords, PINs, credit card details).\n"
+        "   - Suspicious external links or unverified payment handles (UPI IDs, bank details).\n\n"
+        "3. MODERATE RISK (30-60% Risk):\n"
+        "   - Unsolicited business offers, vague links from unknown contacts, or unusual request patterns without explicit financial demands.\n\n"
+        "### FEW-SHOT EXAMPLES FOR CALIBRATION:\n"
+        "Input: \"hi how are you\"\n"
+        "Output: {\"risk_score\": 0, \"alert_triggered\": false, \"reason\": \"Standard friendly greeting with no requests or suspicious links.\"}\n\n"
+        "Input: \"Good morning! Are we still meeting for lunch today?\"\n"
+        "Output: {\"risk_score\": 0, \"alert_triggered\": false, \"reason\": \"Casual personal coordination.\"}\n\n"
+        "Input: \"please send 500 rupees\"\n"
+        "Output: {\"risk_score\": 92, \"alert_triggered\": true, \"reason\": \"Direct request for financial transfer.\"}\n\n"
+        "Input: \"Urgent: Your account is suspended. Click http://bit.ly/fake-link to verify your OTP.\"\n"
+        "Output: {\"risk_score\": 98, \"alert_triggered\": true, \"reason\": \"Phishing attempt using sense of urgency, malicious link, and OTP request.\"}\n\n"
+        "### OUTPUT FORMAT:\n"
+        "Always return your analysis strictly as a valid JSON object:\n"
+        "{\n"
+        "  \"risk_score\": <number between 0 and 100>,\n"
+        "  \"alert_triggered\": <true if risk_score >= 70 else false>,\n"
+        "  \"reason\": \"<one sentence explanation>\"\n"
+        "}"
     )
     response = client.chat.completions.create(
         model=config.chat_model,
@@ -513,7 +549,21 @@ def _read_audio_container(audio: AudioInput) -> tuple[Any, int]:
     np = _require_numpy()
     sf = _require_soundfile()
     if isinstance(audio, (bytes, bytearray)):
-        data, sample_rate = sf.read(io.BytesIO(audio), dtype="float32", always_2d=True)
+        try:
+            data, sample_rate = sf.read(io.BytesIO(audio), dtype="float32", always_2d=True)
+        except Exception:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+                tmp.write(audio)
+                tmp_path = Path(tmp.name)
+            try:
+                waveform, sr = _read_audio_with_librosa_quiet(tmp_path)
+                return waveform, sr
+            finally:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
     else:
         path = Path(audio)
         header = path.read_bytes()[:4] if path.exists() else b""
@@ -762,13 +812,13 @@ def _audio_as_file_payload(
             pcm_channels=pcm_channels,
         )
     if isinstance(audio, (bytes, bytearray)):
-        return "chunk.wav", bytes(audio)
+        return "chunk.webm", bytes(audio)
     if hasattr(audio, "read"):
         current = audio.tell() if hasattr(audio, "tell") else None
         data = audio.read()
         if current is not None and hasattr(audio, "seek"):
             audio.seek(current)
-        return "chunk.wav", data
+        return "chunk.webm", data
 
     path = Path(audio)
     return path.name, path.read_bytes()
@@ -836,13 +886,20 @@ def _merge_intent_results(primary: dict[str, Any], fallback: dict[str, Any]) -> 
 
 
 def _normalize_intent(intent: dict[str, Any]) -> dict[str, Any]:
-    score = _clamp_int(intent.get("coercion_score", 0))
+    score = _clamp_int(intent.get("coercion_score", intent.get("risk_score", 0)))
+    
     triggers = intent.get("detected_triggers", [])
+    if not triggers and "reason" in intent:
+        triggers = [intent["reason"]]
+        
     if not isinstance(triggers, list):
         triggers = [str(triggers)]
+        
+    is_scam = intent.get("is_scam", intent.get("alert_triggered", score >= 70))
+    
     return {
         "coercion_score": score,
-        "is_scam": bool(intent.get("is_scam", score >= 70)),
+        "is_scam": bool(is_scam),
         "detected_triggers": [str(trigger) for trigger in triggers],
     }
 
@@ -883,9 +940,9 @@ def _apply_high_confidence_override(weighted_score: int, intent: dict[str, Any])
     coercion_score = int(intent.get("coercion_score", 0))
     triggers = intent.get("detected_triggers", [])
     trigger_count = len(triggers) if isinstance(triggers, list) else 0
-    if bool(intent.get("is_scam", False)) and coercion_score >= 80 and trigger_count >= 3:
+    if bool(intent.get("is_scam", False)) and coercion_score >= 70 and trigger_count >= 1:
         return max(weighted_score, coercion_score, 81)
-    if coercion_score >= 90 and trigger_count >= 3:
+    if coercion_score >= 80 and trigger_count >= 1:
         return max(weighted_score, coercion_score)
     return weighted_score
 
